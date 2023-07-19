@@ -3,10 +3,13 @@ pragma solidity ^0.8.0;
 
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC4626} from "solmate/mixins/ERC4626.sol";
+
 import {ROLESv1, RolesConsumer} from "olympus-v3/modules/ROLES/OlympusRoles.sol";
 import {TRSRYv1} from "olympus-v3/modules/TRSRY/TRSRY.v1.sol";
 import {MINTRv1} from "olympus-v3/modules/MINTR/MINTR.v1.sol";
 import "olympus-v3/Kernel.sol";
+
+import {console2 as console} from "forge-std/console2.sol";
 
 import {CoolerFactory, Cooler} from "src/CoolerFactory.sol";
 
@@ -55,7 +58,8 @@ contract ClearingHouse is Policy, RolesConsumer {
     uint256 public constant DURATION = 121 days; // Four months
     uint256 public constant FUND_CADENCE = 7 days; // One week
     uint256 public constant FUND_AMOUNT = 18 * 1e24; // 18 million
-    uint256 public constant LIQUID_BALANCE = 3 * 1e24; // 3 million should be liquid, rest to DSR
+
+    // Contract State
 
     uint256 public fundTime; // Timestamp at which rebalancing can occur
 
@@ -71,6 +75,9 @@ contract ClearingHouse is Policy, RolesConsumer {
         sDai = ERC4626(sdai_);
         dai = ERC20(sDai.asset());
         factory = CoolerFactory(coolerFactory_);
+
+        // infinite approve sDAI vault
+        dai.approve(sdai_, type(uint256).max);
     }
 
     // Default framework setup
@@ -95,9 +102,9 @@ contract ClearingHouse is Policy, RolesConsumer {
         override
         returns (Permissions[] memory requests)
     {
-        Keycode memory TRSRY_KEYCODE = toKeycode("TRSRY");
+        Keycode TRSRY_KEYCODE = toKeycode("TRSRY");
 
-        requests = new Permissions[](2);
+        requests = new Permissions[](3);
         requests[0] = Permissions(
             TRSRY_KEYCODE,
             TRSRY.withdrawReserves.selector
@@ -164,24 +171,38 @@ contract ClearingHouse is Policy, RolesConsumer {
 
     // TODO can use TRSRY debt functions instead
 
-    /// @notice fund loan liquidity from treasury
+    /// @notice Fund loan liquidity from treasury once a week
     function rebalance() external {
-        if (fundTime == 0) fundTime = block.timestamp + FUND_CADENCE;
-        else if (fundTime <= block.timestamp) fundTime += FUND_CADENCE;
-        else revert TooEarlyToFund();
+        if (fundTime == 0) {
+            // Initialize on first rebalance
+            fundTime = block.timestamp + FUND_CADENCE;
+        } else if (fundTime <= block.timestamp) {
+            // If after an epoch, increment fundTime by cadence.
+            // This allows the rebalances to catch up if any rebalances are missed.
+            fundTime += FUND_CADENCE;
+        } else {
+            revert TooEarlyToFund();
+        }
 
-        uint256 balance = dai.balanceOf(address(this)) +
-            sDai.maxWithdraw(address(this));
+        // Account for all sDAI and dust DAI that may be in the contract
+        uint256 balance = sDai.maxWithdraw(address(this)) +
+            dai.balanceOf(address(this));
 
         // Rebalance funds on hand with treasury's reserves
         if (balance < FUND_AMOUNT) {
             uint256 amount = FUND_AMOUNT - balance;
 
+            console.log("Checkpoint 1");
+            // Request DAI from treasury, then deposit into sDAI
             TRSRY.increaseWithdrawApproval(address(this), dai, amount);
+            console.log("Checkpoint 2");
+            console.log("TRSRY balance", dai.balanceOf(address(TRSRY)));
             TRSRY.withdrawReserves(address(this), dai, amount);
+            console.log("Checkpoint 3");
             sweep();
+            console.log("Checkpoint 4");
         } else {
-            // Withdraw from sDAI to the treasury
+            // Withdraw from sDAI vault to the treasury
             sDai.withdraw(balance - FUND_AMOUNT, address(TRSRY), address(this));
         }
     }
