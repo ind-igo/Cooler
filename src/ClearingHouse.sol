@@ -9,8 +9,6 @@ import {TRSRYv1} from "olympus-v3/modules/TRSRY/TRSRY.v1.sol";
 import {MINTRv1} from "olympus-v3/modules/MINTR/MINTR.v1.sol";
 import "olympus-v3/Kernel.sol";
 
-import {console2 as console} from "forge-std/console2.sol";
-
 import {CoolerFactory, Cooler} from "src/CoolerFactory.sol";
 
 interface IStaking {
@@ -192,17 +190,12 @@ contract ClearingHouse is Policy, RolesConsumer {
         if (balance < FUND_AMOUNT) {
             uint256 amount = FUND_AMOUNT - balance;
 
-            console.log("Checkpoint 1");
             // Request DAI from treasury, then deposit into sDAI
             TRSRY.increaseWithdrawApproval(address(this), dai, amount);
-            console.log("Checkpoint 2");
-            console.log("TRSRY balance", dai.balanceOf(address(TRSRY)));
             TRSRY.withdrawReserves(address(this), dai, amount);
-            console.log("Checkpoint 3");
             sweep();
-            console.log("Checkpoint 4");
         } else {
-            // Withdraw from sDAI vault to the treasury
+            // Send excess sDAI back to the treasury
             sDai.withdraw(balance - FUND_AMOUNT, address(TRSRY), address(this));
         }
     }

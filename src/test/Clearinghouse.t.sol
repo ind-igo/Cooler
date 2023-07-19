@@ -55,6 +55,10 @@ contract MockStaking {
     }
 }
 
+/// @dev Although we are have sDAI in the treasury, the sDAI will be equal to
+///      DAI values everytime we convert between them. This is because no external
+///      DAI is being added to the sDAI vault, so the exchange rate is 1:1. This
+///      does not cause any issues with our testing.
 contract ClearingHouseTest is Test {
     MockERC20 internal gohm;
     MockERC20 internal ohm;
@@ -73,13 +77,6 @@ contract ClearingHouseTest is Test {
     address internal randomWallet;
     address internal overseer;
     uint256 internal initialSDai;
-
-    // Parameter Bounds
-    uint256 public constant INTEREST_RATE = 5e15; // 0.5%
-    uint256 public constant LOAN_TO_COLLATERAL = 3000 * 1e18; // 3,000
-    uint256 public constant DURATION = 121 days; // Four months
-    uint256 public constant FUND_CADENCE = 7 days; // One week
-    uint256 public constant FUND_AMOUNT = 18 * 1e24; // 18 million
 
     function setUp() public {
         address[] memory users = (new UserFactory()).create(2);
@@ -143,22 +140,21 @@ contract ClearingHouseTest is Test {
 
         // clearinghouse should have nothing
         uint sdaiBal = sdai.balanceOf(address(clearinghouse));
-        assertEq(sdaiBal, 0);
+        assertEq(sdaiBal, clearinghouse.FUND_AMOUNT());
 
         // No funds should be released -- already happened in setUp()
-        console.log("WTFFFFF");
-        console.log("TRSRY DAI BALANCE: ", dai.balanceOf(address(TRSRY)));
+        vm.expectRevert(ClearingHouse.TooEarlyToFund.selector);
         clearinghouse.rebalance();
-        assertTrue(sdaiBal == sdai.balanceOf(address(clearinghouse)));
+        assertEq(sdaiBal, sdai.balanceOf(address(clearinghouse)));
+
+        // Warp 1 week, remove 1 mil from clearinghouse to simulate assets being lent
+        vm.warp(1 weeks);
+        sdai.burn(address(clearinghouse), 1e24);
+
+        clearinghouse.rebalance();
+        //assertEq(balance + budget[1], dai.balanceOf(address(clearinghouse)));
 
         /*
-
-        // Funds equal to second index in array should be released
-        clearinghouse.rebalance();
-        assertTrue(
-            balance + budget[1] == dai.balanceOf(address(clearinghouse))
-        );
-
         balance = dai.balanceOf(address(clearinghouse));
         last = clearinghouse.lastFunded();
 
@@ -172,6 +168,7 @@ contract ClearingHouseTest is Test {
 
     function testRevert_RebalanceEarly() public {
         vm.expectRevert(ClearingHouse.TooEarlyToFund.selector);
+        clearinghouse.rebalance();
     }
 
     // Should be able to rebalance multiple times if past due
